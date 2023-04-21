@@ -20,7 +20,7 @@ modules:
     config:
       # Optional: if set to true, when the last admin in a room leaves it, the module will
       # try to promote any moderator (or user with the highest power level) as admin. In
-      # this mode, it will only freeze the room if it can't find any user to promote.
+      # this mode, it will only set default level as admin on the room if it can't find any user to promote.
       # Defaults to false.
       promote_moderators: false
 ```
