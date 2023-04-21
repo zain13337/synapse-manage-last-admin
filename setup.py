@@ -40,16 +40,16 @@ def exec_file(path_segments, name):
 
 
 setup(
-    name="synapse-freeze-room",
-    packages=["freeze_room"],
+    name="synapse-manage-last-admin",
+    packages=["manage_last_admin"],
     include_package_data=True,
-    description="A third-party rules module for Synapse to automatically freeze a room when the last admin leaves it and allow other members to unfreeze them and become the new admin.",
+    description="A third-party rules module for Synapse to automatically make default level as admin or set moderators as admin when the last admin leaves it.",
     use_scm_version=True,
     setup_requires=["setuptools_scm"],
     install_requires=["attrs"],
     long_description=read_file(("README.md",)),
     long_description_content_type="text/markdown",
-    url="https://github.com/matrix-org/synapse-freeze-room",
+    url="https://github.com/tavhapgouv/synapse-manage-last-admin",
     python_requires=">=3.6",
     classifiers=[
         "Development Status :: 4 - Beta",

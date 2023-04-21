@@ -22,21 +22,18 @@ from synapse.events import EventBase
 from synapse.module_api import ModuleApi, UserID
 from synapse.types import StateMap
 
-from freeze_room._constants import EventTypes, Membership
+from manage_last_admin._constants import EventTypes, Membership
 
 logger = logging.getLogger(__name__)
 
-FROZEN_STATE_TYPE = "org.matrix.room.frozen"
-
 
 @attr.s(auto_attribs=True, frozen=True)
-class FreezeRoomConfig:
-    unfreeze_blacklist: List[str] = []
+class ManageLastAdminConfig:
     promote_moderators: bool = False
 
 
-class FreezeRoom:
-    def __init__(self, config: FreezeRoomConfig, api: ModuleApi):
+class ManageLastAdmin:
+    def __init__(self, config: ManageLastAdminConfig, api: ModuleApi):
         self._api = api
         self._config = config
 
@@ -45,9 +42,8 @@ class FreezeRoom:
         )
 
     @staticmethod
-    def parse_config(config: dict) -> FreezeRoomConfig:
-        return FreezeRoomConfig(
-            config.get("unfreeze_blacklist", []),
+    def parse_config(config: dict) -> ManageLastAdminConfig:
+        return ManageLastAdminConfig(
             config.get("promote_moderators", False),
         )
 
@@ -72,17 +68,9 @@ class FreezeRoom:
             needs to be recalculated, eg because the state of the room has changed), a
             dictionary might be returned in addition to the boolean.
         """
-        if event.type == FROZEN_STATE_TYPE and event.is_state():
-            return await self._on_frozen_state_change(event, state_events)
-
-        # If the room is frozen, we allow a very small number of events to go through
-        # (unfreezing, leaving, etc.).
-        frozen_state = state_events.get((FROZEN_STATE_TYPE, ""))
-        if frozen_state and frozen_state.content.get("frozen", False) is True:
-            return await self._on_event_when_frozen(event, state_events)
 
         # If the event is a leave membership update, check if the last admin is leaving
-        # the room and freeze it if not.
+        # the room
         if (
             event.type == EventTypes.Member
             and event.membership == Membership.LEAVE
@@ -92,147 +80,6 @@ class FreezeRoom:
 
         return True, None
 
-    async def _on_frozen_state_change(
-        self,
-        event: EventBase,
-        state_events: StateMap[EventBase],
-    ) -> Tuple[bool, Optional[dict]]:
-        frozen = event.content.get("frozen", None)
-        if not isinstance(frozen, bool):
-            # Invalid event: frozen is either missing or not a boolean.
-            return False, None
-
-        # If a user on the unfreeze blacklist attempts to unfreeze the room, don't allow
-        # the state change.
-        if (
-            frozen is False
-            and UserID.from_string(event.sender).domain in self._config.unfreeze_blacklist
-        ):
-            return False, None
-
-        current_frozen_state = state_events.get(
-            (FROZEN_STATE_TYPE, ""),
-        )  # type: EventBase
-
-        if (
-            current_frozen_state is not None
-            and current_frozen_state.content.get("frozen") == frozen
-        ):
-            # This is a noop, accept the new event but don't do anything more.
-            return True, None
-
-        # If the event was received over federation, we want to accept it but not to
-        # change the power levels.
-        if not self._is_local_user(event.sender):
-            return True, None
-
-        current_join_rules = state_events.get(
-            (EventTypes.JoinRules, ""),
-        )  # type: EventBase
-
-        # If the room is publicly joinable, revert that upon freezing the room.
-        if frozen is True and(
-            current_join_rules is None
-            or current_join_rules.content["join_rule"] == "public"
-        ):
-            await self._api.create_and_send_event_into_room(
-                {
-                    "room_id": event.room_id,
-                    "sender": event.sender,
-                    "type": EventTypes.JoinRules,
-                    "content": {"join_rule": "invite"},
-                    "state_key": "",
-                }
-            )
-
-        current_power_levels = state_events.get(
-            (EventTypes.PowerLevels, ""),
-        )  # type: EventBase
-
-        power_levels_content = unfreeze(current_power_levels.content)
-
-        if not frozen:
-            # We're unfreezing the room: enforce the right value for the power levels so
-            # the room isn't in a weird/broken state afterwards.
-            users = power_levels_content.setdefault("users", {})
-            users[event.sender] = 100
-            power_levels_content["users_default"] = 0
-        else:
-            # Send a new power levels event with a similar content to the previous one
-            # except users_default is 100 to allow any user to unfreeze the room.
-            power_levels_content["users_default"] = 100
-
-            # Just to be safe, also delete all users that don't have a power level of
-            # 100, in order to prevent anyone from being unable to unfreeze the room.
-            users = {}
-            for user, level in power_levels_content["users"].items():
-                if level == 100:
-                    users[user] = level
-            power_levels_content["users"] = users
-
-        await self._api.create_and_send_event_into_room(
-            {
-                "room_id": event.room_id,
-                "sender": event.sender,
-                "type": EventTypes.PowerLevels,
-                "content": power_levels_content,
-                "state_key": "",
-            }
-        )
-
-        return True, event.get_dict()
-
-    async def _on_event_when_frozen(
-        self,
-        event: EventBase,
-        state_events: StateMap[EventBase],
-    ) -> Tuple[bool, Optional[dict]]:
-        """Check if the provided event is allowed when the room is frozen.
-
-        The only events allowed are for a member to leave the room, and for the room to
-        be (un)frozen. In the latter case, also attempt to unfreeze the room.
-
-
-        Args:
-            event: The event to allow or deny.
-            state_events: A dict mapping (event type, state key) to state event.
-                State events in the room before the event was sent.
-        Returns:
-            A boolean indicating whether the event is allowed, or a dict if the event is
-            allowed but the state of the room has been modified (i.e. the room has been
-            unfrozen). This is because returning a dict of the event forces Synapse to
-            rebuild it, which is needed if the state of the room has changed.
-        """
-        # Allow users to leave the room; don't allow kicks though.
-        if (
-            event.type == EventTypes.Member
-            and event.membership == Membership.LEAVE
-            and event.sender == event.state_key
-        ):
-            return True, None
-
-        if event.type == EventTypes.PowerLevels:
-            # Check if the power level event is associated with a room unfreeze (because
-            # the power level events will be sent before the frozen state event). This
-            # means we check that the users_default is back to 0 and the sender set
-            # themselves as admin.
-            current_power_levels = state_events.get((EventTypes.PowerLevels, ""))
-            if current_power_levels:
-                old_content = current_power_levels.content.copy()
-                old_content["users_default"] = 0
-
-                new_content = unfreeze(event.content)
-                sender_pl = new_content.get("users", {}).get(event.sender, 0)
-
-                # We don't care about the users section as long as the new event gives
-                # full power to the sender.
-                del old_content["users"]
-                del new_content["users"]
-
-                if new_content == old_content and sender_pl == 100:
-                    return True, None
-
-        return False, None
 
     async def _on_room_leave(
         self, event: EventBase, state_events: StateMap[EventBase],
@@ -242,7 +89,7 @@ class FreezeRoom:
         Checks if the user leaving the room is the last admin in the room. If so, checks
         if there are users with lower but non-default power levels that can be promoted
         to admins. If so, promotes them to admin if the configuration allows it,
-        otherwise freezes the room.
+        otherwise change admin rule of the room.
 
         Args:
             event: The event to check.
@@ -278,21 +125,40 @@ class FreezeRoom:
                 await self._promote_to_admins(users_to_promote, pl_content, event)
                 return
 
-        # If not, freeze the room by marking it as frozen. We don't need to update the
-        # power levels now as they'll get updated by on_frozen_state_change when this
-        # event gets processed.
-        logger.info("Freezing room %s", event.room_id)
+        # If not, we see the default power level as admin
+        logger.info("Make admin as default level in room %s", event.room_id)
+        
+        current_power_levels = state_events.get(
+            (EventTypes.PowerLevels, ""),
+        )  # type: EventBase
+
+        power_levels_content = current_power_levels.content
+
+        # Send a new power levels event with a similar content to the previous one
+        # except users_default is 100 to allow any user to be admin of the room.
+        power_levels_content["users_default"] = 100
+
+        # Just to be safe, also delete all users that don't have a power level of
+        # 100, in order to prevent anyone from being unable to be admin the room.
+        # Julien : I am not why it's needed
+        users = {}
+        for user, level in power_levels_content["users"].items():
+            if level == 100:
+                users[user] = level
+        power_levels_content["users"] = users
+
         await self._api.create_and_send_event_into_room(
             {
                 "room_id": event.room_id,
                 "sender": event.sender,
-                "type": FROZEN_STATE_TYPE,
-                "content": {"frozen": True},
+                "type": EventTypes.PowerLevels,
+                "content": power_levels_content,
                 "state_key": "",
             }
         )
 
         return
+
 
     async def _promote_to_admins(
         self,
@@ -499,19 +365,4 @@ def _get_membership(
         return None
 
     return evt.membership
-
-
-def unfreeze(o):
-    if isinstance(o, (dict, frozendict)):
-        return {k: unfreeze(v) for k, v in o.items()}
-
-    if isinstance(o, (bytes, str)):
-        return o
-
-    try:
-        return [unfreeze(i) for i in o]
-    except TypeError:
-        pass
-
-    return o
 

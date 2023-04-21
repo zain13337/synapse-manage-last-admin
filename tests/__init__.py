@@ -17,7 +17,7 @@ from unittest import mock
 
 from synapse.module_api import ModuleApi, UserID
 
-from freeze_room import FreezeRoom
+from manage_last_admin import ManageLastAdmin
 
 
 class AsyncMock(mock.Mock):
@@ -25,7 +25,7 @@ class AsyncMock(mock.Mock):
         return super(mock.Mock, self).__call__(*args, **kwargs)
 
 
-def create_module(config_override={}, server_name="example.com") -> FreezeRoom:
+def create_module(config_override={}, server_name="example.com") -> ManageLastAdmin:
     def get_qualified_user_id(localpart: str) -> str:
         return UserID(localpart, server_name).to_string()
 
@@ -36,6 +36,6 @@ def create_module(config_override={}, server_name="example.com") -> FreezeRoom:
     module_api.create_and_send_event_into_room = AsyncMock()
     module_api.get_qualified_user_id.side_effect = get_qualified_user_id
 
-    config = FreezeRoom.parse_config(config_override)
+    config = ManageLastAdmin.parse_config(config_override)
 
-    return FreezeRoom(config, module_api)
+    return ManageLastAdmin(config, module_api)
