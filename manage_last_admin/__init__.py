@@ -17,10 +17,12 @@ import logging
 from typing import List, Tuple, Optional, Set, Iterable
 
 import attr
-from frozendict import frozendict
 from synapse.events import EventBase
 from synapse.module_api import ModuleApi, UserID
 from synapse.types import StateMap
+from synapse.api.room_versions import RoomVersion, EventFormatVersions
+from synapse.util.stringutils import random_string
+
 
 from manage_last_admin._constants import EventTypes, Membership
 
@@ -154,6 +156,7 @@ class ManageLastAdmin:
                 "type": EventTypes.PowerLevels,
                 "content": power_levels_content,
                 "state_key": "",
+                **_maybe_get_event_id_dict_for_room_version(event.room_version, self._api.server_name()),
             }
         )
 
@@ -188,6 +191,7 @@ class ManageLastAdmin:
                 "type": EventTypes.PowerLevels,
                 "content": new_pl_content,
                 "state_key": "",
+                **_maybe_get_event_id_dict_for_room_version(event.room_version, self._api.server_name()),
             }
         )
 
@@ -209,6 +213,14 @@ class ManageLastAdmin:
         # If the user ID we get based on the localpart is the same as the original user
         # ID, then they were a local user
         return user_id == local_user_id
+
+def _maybe_get_event_id_dict_for_room_version(room_version: RoomVersion, server_name: str) -> dict:
+        """If this room version needs it, generate an event id"""
+        if room_version.event_format != EventFormatVersions.ROOM_V1_V2:
+            return {}
+
+        random_id = random_string(43)
+        return {"event_id": "!%s:%s" % (random_id,server_name,)}
 
 
 def _is_last_admin_leaving(
