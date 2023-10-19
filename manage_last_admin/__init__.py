@@ -14,15 +14,14 @@
 # limitations under the License.
 import copy
 import logging
-from typing import List, Tuple, Optional, Set, Iterable
+from typing import Any, Dict, Iterable, Optional, Tuple
 
 import attr
+from synapse.api.room_versions import EventFormatVersions, RoomVersion
 from synapse.events import EventBase
-from synapse.module_api import ModuleApi, UserID
+from synapse.module_api import ModuleApi
 from synapse.types import StateMap
-from synapse.api.room_versions import RoomVersion, EventFormatVersions
 from synapse.util.stringutils import random_string
-
 
 from manage_last_admin._constants import EventTypes, Membership
 
@@ -44,7 +43,7 @@ class ManageLastAdmin:
         )
 
     @staticmethod
-    def parse_config(config: dict) -> ManageLastAdminConfig:
+    def parse_config(config: Dict[str, Any]) -> ManageLastAdminConfig:
         return ManageLastAdminConfig(
             config.get("promote_moderators", False),
         )
@@ -53,7 +52,7 @@ class ManageLastAdmin:
         self,
         event: EventBase,
         state_events: StateMap[EventBase],
-    ) -> Tuple[bool, Optional[dict]]:
+    ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """Implements synapse.events.ThirdPartyEventRules.check_event_allowed.
 
         Checks the event's type and the current rule and calls the right function to
@@ -82,9 +81,10 @@ class ManageLastAdmin:
 
         return True, None
 
-
     async def _on_room_leave(
-        self, event: EventBase, state_events: StateMap[EventBase],
+        self,
+        event: EventBase,
+        state_events: StateMap[EventBase],
     ) -> None:
         """React to a m.room.member event with a "leave" membership.
 
@@ -129,12 +129,12 @@ class ManageLastAdmin:
 
         # If not, we see the default power level as admin
         logger.info("Make admin as default level in room %s", event.room_id)
-        
-        current_power_levels = state_events.get(
-            (EventTypes.PowerLevels, ""),
-        )  # type: EventBase
 
-        power_levels_content = current_power_levels.content
+        current_power_levels = state_events.get((EventTypes.PowerLevels, ""))
+
+        power_levels_content = (
+            {} if current_power_levels is None else current_power_levels.content
+        )
 
         # Send a new power levels event with a similar content to the previous one
         # except users_default is 100 to allow any user to be admin of the room.
@@ -156,17 +156,18 @@ class ManageLastAdmin:
                 "type": EventTypes.PowerLevels,
                 "content": power_levels_content,
                 "state_key": "",
-                **_maybe_get_event_id_dict_for_room_version(event.room_version, self._api.server_name()),
+                **_maybe_get_event_id_dict_for_room_version(
+                    event.room_version, self._api.server_name
+                ),
             }
         )
 
         return
 
-
     async def _promote_to_admins(
         self,
         users_to_promote: Iterable[str],
-        pl_content: dict,
+        pl_content: Dict[str, Any],
         event: EventBase,
     ) -> None:
         """Promotes a given list of users to admins.
@@ -191,41 +192,27 @@ class ManageLastAdmin:
                 "type": EventTypes.PowerLevels,
                 "content": new_pl_content,
                 "state_key": "",
-                **_maybe_get_event_id_dict_for_room_version(event.room_version, self._api.server_name()),
+                **_maybe_get_event_id_dict_for_room_version(
+                    event.room_version, self._api.server_name
+                ),
             }
         )
 
-    def _is_local_user(self, user_id: str) -> bool:
-        """Checks whether a given user ID belongs to this homeserver, or a remote
 
-        Args:
-            user_id: A user ID to check.
+def _maybe_get_event_id_dict_for_room_version(
+    room_version: RoomVersion, server_name: str
+) -> Dict[str, str]:
+    """If this room version needs it, generate an event id"""
+    if room_version.event_format != EventFormatVersions.ROOM_V1_V2:
+        return {}
 
-        Returns:
-            True if the user belongs to this homeserver, False otherwise.
-        """
-        user = UserID.from_string(user_id)
-
-        # Extract the localpart and ask the module API for a user ID from the localpart
-        # The module API will append the local homeserver's server_name
-        local_user_id = self._api.get_qualified_user_id(user.localpart)
-
-        # If the user ID we get based on the localpart is the same as the original user
-        # ID, then they were a local user
-        return user_id == local_user_id
-
-def _maybe_get_event_id_dict_for_room_version(room_version: RoomVersion, server_name: str) -> dict:
-        """If this room version needs it, generate an event id"""
-        if room_version.event_format != EventFormatVersions.ROOM_V1_V2:
-            return {}
-
-        random_id = random_string(43)
-        return {"event_id": "!%s:%s" % (random_id,server_name,)}
+    random_id = random_string(43)
+    return {"event_id": "!%s:%s" % (random_id, server_name)}
 
 
 def _is_last_admin_leaving(
     event: EventBase,
-    power_level_content: dict,
+    power_level_content: Dict[str, Any],
     state_events: StateMap[EventBase],
 ) -> bool:
     """Checks if the provided leave event is the last admin in the room leaving it.
@@ -266,7 +253,7 @@ def _is_last_admin_leaving(
 
 def _get_power_levels_content_from_state(
     state_events: StateMap[EventBase],
-) -> Optional[dict]:
+) -> Optional[Dict[str, Any]]:
     """Extracts the content of the power levels content from the provided set of state
     events. If the event has no "users" key, or there is no power levels event in the
     state of the room, None is returned instead.
@@ -279,10 +266,8 @@ def _get_power_levels_content_from_state(
         levels event exist in the given state events or if one exists but its content is
         missing a "users" key.
     """
-    power_level_state_event = state_events.get(
-        (EventTypes.PowerLevels, "")
-    )  # type: EventBase
-    if not power_level_state_event:
+    power_level_state_event = state_events.get((EventTypes.PowerLevels, ""))
+    if power_level_state_event is None:
         return None
     power_level_content = power_level_state_event.content
 
@@ -300,11 +285,11 @@ def _get_power_levels_content_from_state(
 
 
 def _get_users_with_highest_nondefault_pl(
-    users_dict: dict,
+    users_dict: Dict[str, Any],
     users_default_pl: int,
     state_events: StateMap[EventBase],
     ignore_user: str,
-) -> Tuple[str]:
+) -> Iterable[str]:
     """Looks at the provided bits of power levels event content to figure out what the
     maximum user-specific non-default power level is with users still in the room (or
     invited to it) and which users have it.
@@ -331,32 +316,30 @@ def _get_users_with_highest_nondefault_pl(
     while True:
         # If there's no more user to evaluate, return an empty tuple.
         if not users_dict_copy:
-            return ()
+            return []
 
         # Get the max power level in the dict.
         max_pl = max(users_dict_copy.values())
 
         # Bail out if the max power level is the default one (or is lower).
         if max_pl <= users_default_pl:
-            return ()
+            return []
 
         # Figure out which users have that maximum power level.
-        users_with_max_pl = tuple(
-            user_id
-            for user_id, pl in users_dict_copy.items()
-            if pl == max_pl
-        )
+        users_with_max_pl = [
+            user_id for user_id, pl in users_dict_copy.items() if pl == max_pl
+        ]
 
         # Among those users, figure out which ones are still in the room (or have a
         # pending invite to it): those are the users we need to promote.
-        users_to_promote = tuple(
+        users_to_promote = [
             user_id
             for user_id in users_with_max_pl
             if (
                 _get_membership(user_id, state_events)
                 in [Membership.JOIN, Membership.INVITE]
             )
-        )
+        ]
 
         # If we've got users in the room to promote, break out and return.
         if users_to_promote:
@@ -370,11 +353,10 @@ def _get_users_with_highest_nondefault_pl(
 def _get_membership(
     user_id: str,
     state_events: StateMap[EventBase],
-) -> Optional[Membership]:
+) -> Optional[str]:
     evt: Optional[EventBase] = state_events.get((EventTypes.Member, user_id))
 
     if evt is None:
         return None
 
     return evt.membership
-

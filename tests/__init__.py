@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import Any, Dict
 from unittest import mock
 
 from synapse.module_api import ModuleApi, UserID
@@ -20,12 +21,9 @@ from synapse.module_api import ModuleApi, UserID
 from manage_last_admin import ManageLastAdmin
 
 
-class AsyncMock(mock.Mock):
-    async def __call__(self, *args, **kwargs):
-        return super(mock.Mock, self).__call__(*args, **kwargs)
-
-
-def create_module(config_override={}, server_name="example.com") -> ManageLastAdmin:
+def create_module(
+    config_override: Dict[str, Any] = {}, server_name: str = "example.com"
+) -> ManageLastAdmin:
     def get_qualified_user_id(localpart: str) -> str:
         return UserID(localpart, server_name).to_string()
 
@@ -33,7 +31,7 @@ def create_module(config_override={}, server_name="example.com") -> ManageLastAd
     # because some capabilities (interacting with the database, getting the current time,
     # etc.) are needed for running the tests.
     module_api = mock.Mock(spec=ModuleApi)
-    module_api.create_and_send_event_into_room = AsyncMock()
+    module_api.create_and_send_event_into_room = mock.AsyncMock()
     module_api.get_qualified_user_id.side_effect = get_qualified_user_id
 
     config = ManageLastAdmin.parse_config(config_override)

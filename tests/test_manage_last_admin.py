@@ -13,27 +13,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import copy
-
 # From Python 3.8 onwards, aiounittest.AsyncTestCase can be replaced by
 # unittest.IsolatedAsyncioTestCase, so we'll be able to get rid of this dependency when
 # we stop supporting Python < 3.8 in Synapse.
+from abc import abstractmethod
+
 import aiounittest
 from synapse.api.room_versions import RoomVersions
-from synapse.events import make_event_from_dict
+from synapse.events import EventBase, make_event_from_dict
 from synapse.types import JsonDict
 from synapse.util.stringutils import random_string
 
-from manage_last_admin import EventTypes, Membership, ManageLastAdmin
+from manage_last_admin import EventTypes, Membership
 from tests import create_module
 
-class ManageLastAdminTestCases:
 
+class ManageLastAdminTestCases:
     class BaseManageLastAdminTest(aiounittest.AsyncTestCase):
-        def create_event(self, content: JsonDict):
+        @abstractmethod
+        def create_event(self, content: JsonDict) -> EventBase:
             pass
 
-        def setUp(self):
+        def setUp(self) -> None:
             self.user_id = "@alice:example.com"
             self.left_user_id = "@nothere:example.com"
             self.mod_user_id = "@mod:example.com"
@@ -66,7 +67,7 @@ class ManageLastAdminTestCases:
                                 self.left_user_id: 75,
                                 self.mod_user_id: 50,
                             },
-                            "users_default": 0
+                            "users_default": 0,
                         },
                         "room_id": self.room_id,
                     },
@@ -100,7 +101,7 @@ class ManageLastAdminTestCases:
                 ),
             }
 
-        async def test_power_levels_sent_when_last_admin_leaves(self):
+        async def test_power_levels_sent_when_last_admin_leaves(self) -> None:
             """Tests that the module sends the right power levels update when it sees its last admin leave."""
             module = create_module()
 
@@ -114,7 +115,9 @@ class ManageLastAdminTestCases:
                 },
             )
 
-            allowed, replacement = await module.check_event_allowed(leave_event, self.state)
+            allowed, replacement = await module.check_event_allowed(
+                leave_event, self.state
+            )
             self.assertTrue(allowed)
             self.assertEqual(replacement, None)
 
@@ -129,7 +132,7 @@ class ManageLastAdminTestCases:
             for user, pl in pl_event_dict["content"]["users"].items():
                 self.assertEqual(pl, 100, user)
 
-        async def test_promote_when_last_admin_leaves(self):
+        async def test_promote_when_last_admin_leaves(self) -> None:
             """Tests that the module promotes whoever has the highest non-default PL to admin
             when the last admin leaves, if the config allows it.
             """
@@ -148,7 +151,9 @@ class ManageLastAdminTestCases:
             )
 
             # Check that we get the right result back from the callback.
-            allowed, replacement = await module.check_event_allowed(leave_event, self.state)
+            allowed, replacement = await module.check_event_allowed(
+                leave_event, self.state
+            )
             self.assertTrue(allowed)
             self.assertEqual(replacement, None)
 
@@ -164,8 +169,12 @@ class ManageLastAdminTestCases:
             evt_dict: dict = args[0]
             self.assertEqual(evt_dict["type"], EventTypes.PowerLevels, evt_dict)
             self.assertIsNotNone(evt_dict.get("state_key"))
-            self.assertEqual(evt_dict["content"]["users"][self.left_user_id], 75, evt_dict)
-            self.assertEqual(evt_dict["content"]["users"][self.mod_user_id], 100, evt_dict)
+            self.assertEqual(
+                evt_dict["content"]["users"][self.left_user_id], 75, evt_dict
+            )
+            self.assertEqual(
+                evt_dict["content"]["users"][self.mod_user_id], 100, evt_dict
+            )
 
             # Now we push both the leave event and the power levels update into the state of
             # the room.
@@ -185,7 +194,8 @@ class ManageLastAdminTestCases:
 
             # Check that we get the right result back from the callback.
             allowed, replacement = await module.check_event_allowed(
-                new_leave_event, self.state,
+                new_leave_event,
+                self.state,
             )
             self.assertTrue(allowed)
             self.assertEqual(replacement, None)
@@ -195,7 +205,7 @@ class ManageLastAdminTestCases:
             args, _ = module._api.create_and_send_event_into_room.call_args
             self.assertEqual(len(args), 1)
 
-            ## Test that now that there's no user to promote anymore, the room default user level is 100.
+            # Test that now that there's no user to promote anymore, the room default user level is 100.
             pl_event_dict = args[0]
 
             self.assertEqual(pl_event_dict["content"]["users_default"], 100)
@@ -204,19 +214,11 @@ class ManageLastAdminTestCases:
 
 
 class ManageLastAdminTestRoomV9(ManageLastAdminTestCases.BaseManageLastAdminTest):
-
     def create_event(self, content: JsonDict):
-        return make_event_from_dict(
-            content,
-            RoomVersions.V9
-        )
+        return make_event_from_dict(content, RoomVersions.V9)
 
 
 class ManageLastAdminTestRoomV1(ManageLastAdminTestCases.BaseManageLastAdminTest):
-
     def create_event(self, content: JsonDict):
         content["event_id"] = f"!{random_string(43)}:example.com"
-        return make_event_from_dict(
-            content,
-            RoomVersions.V1
-        )
+        return make_event_from_dict(content, RoomVersions.V1)
