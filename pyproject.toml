@@ -1,10 +1,48 @@
+[project]
+name = "manage_last_admin"
+description = "A third-party rules module for Synapse to automatically make default level as admin or set moderators as admin when the last admin leaves it."
+readme = "README.md"
+dynamic = ["version"]
+
+requires-python = ">=3.8"
+
+classifiers = [
+  "License :: OSI Approved :: Apache Software License"
+]
+
+dependencies = [
+  "attrs"
+]
+
+[project.optional-dependencies]
+dev = [
+  # for tests
+  "pydantic>=1.7.4, <2.0",
+  "matrix-synapse==1.84.0",
+  "tox",
+  "twisted",
+  "aiounittest",
+  # for type checking
+  "mypy == 1.6.1",
+  # for linting
+  "black == 23.10.0",
+  "flake8 == 6.1.0",
+  "isort == 5.12.0",
+]
+
+[project.urls]
+repository = "https://github.com/tchapgouv/synapse-manage-last-admin"
+
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools", "setuptools_scm", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.isort]
 profile = "black"
 known_first_party = [
-    "manage_last_admin",
-    "tests"
+  "manage_last_admin",
+  "tests"
 ]
+
+[tool.mypy]
+strict = true
