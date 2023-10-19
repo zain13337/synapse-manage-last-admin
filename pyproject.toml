@@ -37,6 +37,8 @@ repository = "https://github.com/tchapgouv/synapse-manage-last-admin"
 requires = ["setuptools", "setuptools_scm", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools_scm]
+
 [tool.isort]
 profile = "black"
 known_first_party = [
