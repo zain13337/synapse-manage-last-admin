@@ -132,8 +132,12 @@ class ManageLastAdmin:
 
         current_power_levels = state_events.get((EventTypes.PowerLevels, ""))
 
+        # Make a deep copy of the content so we don't edit the "users" dict from
+        # the event that's currently in the room's state.
         power_levels_content = (
-            {} if current_power_levels is None else current_power_levels.content
+            {}
+            if current_power_levels is None
+            else copy.deepcopy(current_power_levels.content)
         )
 
         # Send a new power levels event with a similar content to the previous one
