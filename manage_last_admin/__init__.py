@@ -38,7 +38,7 @@ class ManageLastAdmin:
         self._config = config
 
         self._api.register_third_party_rules_callbacks(
-            check_event_allowed=self.check_event_allowed,
+            check_event_allowed=self.check_event_allowed
         )
 
     @staticmethod

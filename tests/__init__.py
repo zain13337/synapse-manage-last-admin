@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from unittest import mock
 
 from synapse.module_api import ModuleApi, UserID
@@ -22,8 +22,11 @@ from manage_last_admin import ManageLastAdmin
 
 
 def create_module(
-    config_override: Dict[str, Any] = {}, server_name: str = "example.com"
+    config_override: Optional[Dict[str, Any]] = None, server_name: str = "example.com"
 ) -> ManageLastAdmin:
+    if config_override is None:
+        config_override = {}
+
     def get_qualified_user_id(localpart: str) -> str:
         return UserID(localpart, server_name).to_string()
 
