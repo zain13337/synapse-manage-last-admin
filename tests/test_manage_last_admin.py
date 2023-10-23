@@ -17,14 +17,15 @@
 # unittest.IsolatedAsyncioTestCase, so we'll be able to get rid of this dependency when
 # we stop supporting Python < 3.8 in Synapse.
 from abc import abstractmethod
+from typing import Any, Dict
 
 import aiounittest
+from synapse.api.constants import EventTypes, Membership
 from synapse.api.room_versions import RoomVersions
 from synapse.events import EventBase, make_event_from_dict
 from synapse.types import JsonDict
 from synapse.util.stringutils import random_string
 
-from manage_last_admin import EventTypes, Membership
 from tests import create_module
 
 
@@ -122,8 +123,8 @@ class ManageLastAdminTestCases:
             self.assertEqual(replacement, None)
 
             # Test that the leave triggered a freeze of the room.
-            self.assertTrue(module._api.create_and_send_event_into_room.called)
-            args, _ = module._api.create_and_send_event_into_room.call_args
+            self.assertTrue(module._api.create_and_send_event_into_room.called)  # type: ignore[attr-defined]
+            args, _ = module._api.create_and_send_event_into_room.call_args  # type: ignore[attr-defined]
             self.assertEqual(len(args), 1)
 
             pl_event_dict = args[0]
@@ -158,15 +159,15 @@ class ManageLastAdminTestCases:
             self.assertEqual(replacement, None)
 
             # Test that a new event was sent into the room.
-            self.assertTrue(module._api.create_and_send_event_into_room.called)
-            args, _ = module._api.create_and_send_event_into_room.call_args
+            self.assertTrue(module._api.create_and_send_event_into_room.called)  # type: ignore[attr-defined]
+            args, _ = module._api.create_and_send_event_into_room.call_args  # type: ignore[attr-defined]
             self.assertEqual(len(args), 1)
 
             # Test that:
             #   * the event is a power levels update
             #   * the user who is PL 75 but left the room didn't get promoted
             #   * the user who was PL 50 and is still in the room got promoted
-            evt_dict: dict = args[0]
+            evt_dict: Dict[str, Any] = args[0]
             self.assertEqual(evt_dict["type"], EventTypes.PowerLevels, evt_dict)
             self.assertIsNotNone(evt_dict.get("state_key"))
             self.assertEqual(
@@ -201,8 +202,8 @@ class ManageLastAdminTestCases:
             self.assertEqual(replacement, None)
 
             # Test that a new event was sent into the room.
-            self.assertTrue(module._api.create_and_send_event_into_room.called)
-            args, _ = module._api.create_and_send_event_into_room.call_args
+            self.assertTrue(module._api.create_and_send_event_into_room.called)  # type: ignore[attr-defined]
+            args, _ = module._api.create_and_send_event_into_room.call_args  # type: ignore[attr-defined]
             self.assertEqual(len(args), 1)
 
             # Test that now that there's no user to promote anymore, the room default user level is 100.
@@ -214,11 +215,11 @@ class ManageLastAdminTestCases:
 
 
 class ManageLastAdminTestRoomV9(ManageLastAdminTestCases.BaseManageLastAdminTest):
-    def create_event(self, content: JsonDict):
+    def create_event(self, content: JsonDict) -> EventBase:
         return make_event_from_dict(content, RoomVersions.V9)
 
 
 class ManageLastAdminTestRoomV1(ManageLastAdminTestCases.BaseManageLastAdminTest):
-    def create_event(self, content: JsonDict):
+    def create_event(self, content: JsonDict) -> EventBase:
         content["event_id"] = f"!{random_string(43)}:example.com"
         return make_event_from_dict(content, RoomVersions.V1)
