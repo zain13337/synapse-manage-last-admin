@@ -14,7 +14,7 @@
 # limitations under the License.
 import copy
 import logging
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Any, Dict, Final, Iterable, Optional, Tuple
 
 import attr
 from synapse.api.constants import EventTypes, Membership
@@ -25,6 +25,22 @@ from synapse.types import StateMap
 from synapse.util.stringutils import random_string
 
 logger = logging.getLogger(__name__)
+
+
+class RoomType:
+    DIRECT: Final = "DIRECT"
+    PUBLIC: Final = "PUBLIC"
+    PRIVATE: Final = "PRIVATE"
+    EXTERNAL: Final = "EXTERNAL"
+    UNKNOWN: Final = "UNKNOWN"
+
+
+ACCESS_RULES_TYPE = "im.vector.room.access_rules"
+
+
+class AccessRules:
+    RESTRICTED = "restricted"
+    UNRESTRICTED = "unrestricted"
 
 
 @attr.s(auto_attribs=True, frozen=True)
@@ -128,9 +144,18 @@ class ManageLastAdmin:
 
         # If not, we see the default power level as admin
         logger.info("Make admin as default level in room %s", event.room_id)
+        await self._set_room_users_default_to_admin(event, state_events)
+        return
+
+    async def _set_room_users_default_to_admin(
+        self, event: EventBase, state_events: StateMap[EventBase]
+    ) -> None:
+        # We make sure to change default permission only on public or private rooms
+        is_room_public_or_private = _is_room_public_or_private(state_events)
+        if not is_room_public_or_private:
+            return
 
         current_power_levels = state_events.get((EventTypes.PowerLevels, ""))
-
         # Make a deep copy of the content so we don't edit the "users" dict from
         # the event that's currently in the room's state.
         power_levels_content = (
@@ -138,11 +163,9 @@ class ManageLastAdmin:
             if current_power_levels is None
             else copy.deepcopy(current_power_levels.content)
         )
-
         # Send a new power levels event with a similar content to the previous one
         # except users_default is 100 to allow any user to be admin of the room.
         power_levels_content["users_default"] = 100
-
         # Just to be safe, also delete all users that don't have a power level of
         # 100, in order to prevent anyone from being unable to be admin the room.
         # Julien : I am not why it's needed
@@ -151,7 +174,6 @@ class ManageLastAdmin:
             if level == 100:
                 users[user] = level
         power_levels_content["users"] = users
-
         await self._api.create_and_send_event_into_room(
             {
                 "room_id": event.room_id,
@@ -164,8 +186,6 @@ class ManageLastAdmin:
                 ),
             }
         )
-
-        return
 
     async def _promote_to_admins(
         self,
@@ -211,6 +231,53 @@ def _maybe_get_event_id_dict_for_room_version(
 
     random_id = random_string(43)
     return {"event_id": "!%s:%s" % (random_id, server_name)}
+
+
+def _is_room_encrypted(
+    state_events: StateMap[EventBase],
+) -> bool:
+    room_encryption = state_events.get((EventTypes.RoomEncryption, ""))
+    if room_encryption:
+        return True
+    return False
+
+
+def _get_access_rule_type(
+    state_events: StateMap[EventBase],
+) -> Optional[Any]:
+    access_rule_type_event = state_events.get((ACCESS_RULES_TYPE, ""))
+    if access_rule_type_event is None:
+        return None
+    return access_rule_type_event.content["rule"]
+
+
+def _is_room_public_or_private(
+    state_events: StateMap[EventBase],
+) -> bool:
+    """Checks if the room is public or private
+
+    Args:
+        state_events: The current state of the room, from which we can check the room's type.
+
+    Returns:
+        True if this room is public or private otherwise false.
+    """
+    room_type = _get_room_type(state_events)
+    return room_type in [RoomType.PRIVATE, RoomType.PUBLIC]
+
+
+def _get_room_type(
+    state_events: StateMap[EventBase],
+) -> str:
+    is_room_encrypted = _is_room_encrypted(state_events)
+    if not is_room_encrypted:
+        return RoomType.PUBLIC
+    access_rule_type = _get_access_rule_type(state_events)
+    if access_rule_type == AccessRules.RESTRICTED:
+        return RoomType.PRIVATE
+    if access_rule_type == AccessRules.UNRESTRICTED:
+        return RoomType.EXTERNAL
+    return RoomType.UNKNOWN
 
 
 def _is_last_admin_leaving(
