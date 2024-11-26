@@ -23,6 +23,10 @@ modules:
       # this mode, it will only set default level as admin on the room if it can't find any user to promote.
       # Defaults to false.
       promote_moderators: false
+      # List of domains (server names) that can't be invited to rooms if the
+      # "restricted" rule is set. Users from those server will never be granted admin by this module.
+      # Defaults to an empty list.
+      domains_forbidden_when_restricted: []
 ```
 
 ## Development and Testing
