@@ -14,13 +14,13 @@
 # limitations under the License.
 import copy
 import logging
-from typing import Any, Dict, Final, Iterable, Optional, Tuple
+from typing import Any, Dict, Final, Iterable, Optional, Tuple, List
 
 import attr
 from synapse.api.constants import EventTypes, Membership
 from synapse.api.room_versions import EventFormatVersions, RoomVersion
 from synapse.events import EventBase
-from synapse.module_api import ModuleApi
+from synapse.module_api import ModuleApi, UserID
 from synapse.types import StateMap
 from synapse.util.stringutils import random_string
 
@@ -46,6 +46,7 @@ class AccessRules:
 @attr.s(auto_attribs=True, frozen=True)
 class ManageLastAdminConfig:
     promote_moderators: bool = False
+    domains_forbidden_when_restricted: List[str] = []
 
 
 class ManageLastAdmin:
@@ -61,6 +62,7 @@ class ManageLastAdmin:
     def parse_config(config: Dict[str, Any]) -> ManageLastAdminConfig:
         return ManageLastAdminConfig(
             config.get("promote_moderators", False),
+            config.get("domains_forbidden_when_restricted", [])
         )
 
     async def check_event_allowed(
@@ -134,6 +136,11 @@ class ManageLastAdmin:
             # If we found users to promote, update the power levels event in the room's
             # state.
             if users_to_promote:
+                #avoid external users to be promoted
+                users_to_promote = _filter_out_users_from_forbidden_domain(
+                    users_to_promote, 
+                    self._config.domains_forbidden_when_restricted)
+
                 logger.info(
                     "Promoting users to admins in room %s: %s",
                     event.room_id,
@@ -142,18 +149,29 @@ class ManageLastAdmin:
                 await self._promote_to_admins(users_to_promote, pl_content, event)
                 return
 
-        # If not, we see the default power level as admin
-        logger.info("Make admin as default level in room %s", event.room_id)
-        await self._set_room_users_default_to_admin(event, state_events)
-        return
+        room_type = _get_room_type(state_events)
+        if room_type in [RoomType.PRIVATE, RoomType.PUBLIC]:
+            # We make sure to change default permission only on public or private rooms
+            # If not, we set the default power level as admin
+            logger.info("Make admin as default level in room %s", event.room_id)
+            await self._set_room_users_default_to_admin(event, state_events)
+        elif room_type in [RoomType.UNKNOWN, RoomType.EXTERNAL]:
+            # In case of External or Unknown Room
+            # promote all users with default power levels except external users
+            users_to_promote = _get_users_with_default_pl(pl_content["users"],
+                state_events)
+            
+            #avoid external users to be promoted
+            users_to_promote = _filter_out_users_from_forbidden_domain(
+                    users_to_promote, 
+                    self._config.domains_forbidden_when_restricted)
+            
+            logger.info("Make admin all non-external default power level users room %s: %s", event.room_id, ', '.join(users_to_promote))
+            await self._promote_to_admins(users_to_promote, pl_content, event)
 
     async def _set_room_users_default_to_admin(
         self, event: EventBase, state_events: StateMap[EventBase]
     ) -> None:
-        # We make sure to change default permission only on public or private rooms
-        is_room_public_or_private = _is_room_public_or_private(state_events)
-        if not is_room_public_or_private:
-            return
 
         current_power_levels = state_events.get((EventTypes.PowerLevels, ""))
         # Make a deep copy of the content so we don't edit the "users" dict from
@@ -208,19 +226,25 @@ class ManageLastAdmin:
         for user in users_to_promote:
             new_pl_content["users"][user] = pl_content["users"][event.sender]
 
-        await self._api.create_and_send_event_into_room(
-            {
-                "room_id": event.room_id,
-                "sender": event.sender,
-                "type": EventTypes.PowerLevels,
-                "content": new_pl_content,
-                "state_key": "",
-                **_maybe_get_event_id_dict_for_room_version(
-                    event.room_version, self._api.server_name
-                ),
-            }
-        )
-
+        try: 
+            await self._api.create_and_send_event_into_room(
+                {
+                    "room_id": event.room_id,
+                    "sender": event.sender,
+                    "type": EventTypes.PowerLevels,
+                    "content": new_pl_content,
+                    "state_key": "",
+                    **_maybe_get_event_id_dict_for_room_version(
+                        event.room_version, self._api.server_name
+                    ),
+                }
+            )
+        except Exception as e:  # Catch all other exceptions
+            # Generic handling if you don't know the exact type of the exception
+            # if users_to_promote list if very very large, we might reach the event size limit of 65kb 
+            # see : https://spec.matrix.org/v1.12/client-server-api/#size-limits
+            logger.info("Cannot send promote event : %s", e)
+ 
 
 def _maybe_get_event_id_dict_for_room_version(
     room_version: RoomVersion, server_name: str
@@ -245,6 +269,10 @@ def _is_room_encrypted(
 def _get_access_rule_type(
     state_events: StateMap[EventBase],
 ) -> Optional[Any]:
+    """
+    TODO : This method is slightly different from this one:
+    https://github.com/tchapgouv/synapse-room-access-rules/blob/3ade4c621ed874e2d2c6c9b12c6dd303350639c4/room_access_rules/__init__.py#L962
+    """
     access_rule_type_event = state_events.get((ACCESS_RULES_TYPE, ""))
     if access_rule_type_event is None:
         return None
@@ -310,10 +338,10 @@ def _is_last_admin_leaving(
 
     if any(
         event_type == EventTypes.Member
-        and event.membership in [Membership.JOIN, Membership.INVITE]
+        and state_event.membership in [Membership.JOIN, Membership.INVITE]
         and state_key in admin_users
         and state_key != event.sender
-        for (event_type, state_key), event in state_events.items()
+        for (event_type, state_key), state_event in state_events.items()
     ):
         # There's another admin user in, or invited to, the room
         return False
@@ -352,6 +380,37 @@ def _get_power_levels_content_from_state(
         return None
 
     return power_level_content
+
+def _get_members_in_room_from_state_events(state_events: StateMap[EventBase]
+)-> list[str]: 
+    members = []
+    for (event_type, state_key), state_event in state_events.items():
+        if (
+            event_type == EventTypes.Member
+            and state_event.membership == Membership.JOIN
+            and state_event.is_state()
+        ):
+            members.append(state_key)  # state_key is the user ID
+    return members
+
+
+def _get_users_with_default_pl(
+    users_pl_dict: Dict[str, Any],
+    state_events: StateMap[EventBase]
+)->  Iterable[str]:
+    # Make a copy of the users dict so we don't modify the actual event content.
+    users_dict_copy = users_pl_dict.copy()
+
+    # If there's no more user to evaluate, return an empty tuple.
+    if not users_dict_copy:
+        return []
+    
+    # Figure out which users in still in the room :
+    members_in_room = _get_members_in_room_from_state_events(state_events)
+
+    users_with_default_pl = [user for user in members_in_room if user not in users_pl_dict]
+    
+    return users_with_default_pl
 
 
 def _get_users_with_highest_nondefault_pl(
@@ -430,3 +489,19 @@ def _get_membership(
         return None
 
     return evt.membership
+
+def _filter_out_users_from_forbidden_domain(user_ids: Iterable[str], forbidden_domains: List[str]
+) -> List[str]:
+    """Filters out any users that belong to forbidden domains.
+
+    Args:
+        user_ids: An iterable of user IDs to filter.
+        forbidden_domains: A list of domain names that are forbidden.
+
+    Returns:
+        A list of user IDs with users from forbidden domains filtered out.
+    """
+    if user_ids is None:
+        return None
+    
+    return [user_id for user_id in user_ids if UserID.from_string(user_id).domain not in forbidden_domains]

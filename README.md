@@ -33,12 +33,3 @@ This repository uses `tox` to run tests.
 
 This repository uses `unittest` to run the tests located in the `tests`
 directory. They can be ran with `tox -e tests`.
-
-### Making a release
-
-```
-git tag vX.Y
-python3 setup.py sdist
-twine upload dist/synapse-manage-last-admin-X.Y.tar.gz
-git push origin vX.Y
-```
